@@ -21,18 +21,27 @@ const createTask = async (req, res, next) => {
       position
     });
 
-    await ActivityLog.create({
-      boardId,
-      userId: req.user.id,
-      action: 'CREATE_TASK',
-      details: { taskTitle: title }
-    });
-
-    // Broadcast updated list to board room for instant sync
-    const allTasks = await Task.find({ boardId }).sort({ position: 1 });
-    getIO().to(`board:${boardId}`).emit('task:sync', { boardId, tasks: allTasks });
-
+    // Respond to user immediately for maximum perceived performance
     res.status(201).json({ success: true, task });
+
+    // ─── Post-Response Tasks (Background) ─────────────────────────────────────
+    // We run these without 'await' so the client doesn't have to wait for them.
+    (async () => {
+      try {
+        await ActivityLog.create({
+          boardId,
+          userId: req.user.id,
+          action: 'CREATE_TASK',
+          details: { taskTitle: title }
+        });
+
+        // Broadcast updated list to board room for instant sync
+        const allTasks = await Task.find({ boardId }).sort({ position: 1 });
+        getIO().to(`board:${boardId}`).emit('task:sync', { boardId, tasks: allTasks });
+      } catch (err) {
+        console.error('Background task failure:', err.message);
+      }
+    })();
   } catch (err) { next(err); }
 };
 
