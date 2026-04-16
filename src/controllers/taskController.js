@@ -25,21 +25,23 @@ const createTask = async (req, res, next) => {
     res.status(201).json({ success: true, task });
 
     // ─── Post-Response Tasks (Background) ─────────────────────────────────────
-    // We run these without 'await' so the client doesn't have to wait for them.
     (async () => {
       try {
-        await ActivityLog.create({
-          boardId,
-          userId: req.user.id,
-          action: 'CREATE_TASK',
-          details: { taskTitle: title }
-        });
+        // Run Sync and Logging in parallel to minimize latency for other users
+        const [allTasks] = await Promise.all([
+          Task.find({ boardId }).sort({ position: 1 }),
+          ActivityLog.create({
+            boardId,
+            userId: req.user.id,
+            action: 'CREATE_TASK',
+            details: { taskTitle: title }
+          })
+        ]);
 
-        // Broadcast updated list to board room for instant sync
-        const allTasks = await Task.find({ boardId }).sort({ position: 1 });
+        console.log(`Broadcasting task:sync for board ${boardId}`);
         getIO().to(`board:${boardId}`).emit('task:sync', { boardId, tasks: allTasks });
       } catch (err) {
-        console.error('Background task failure:', err.message);
+        console.error('Background task sync failure:', err.message);
       }
     })();
   } catch (err) { next(err); }
@@ -72,18 +74,28 @@ const moveTask = async (req, res, next) => {
       newPosition
     });
 
-    await ActivityLog.create({
-      boardId,
-      userId: req.user.id,
-      action: 'MOVE_TASK',
-      details: { taskId: id, from: sourceStatus, to: destinationStatus }
-    });
-
-    // Broadcast the full updated list to all members for instant cache patching
-    const allTasks = await Task.find({ boardId }).sort({ position: 1 });
-    getIO().to(`board:${boardId}`).emit('task:sync', { boardId, tasks: allTasks });
-
+    // Respond to user immediately after the core operation is successful
     res.json({ success: true, message: 'Task moved successfully' });
+
+    // ─── Post-Response Tasks (Background) ─────────────────────────────────────
+    (async () => {
+      try {
+        // Fetch tasks and log activity in parallel
+        const [allTasks] = await Promise.all([
+          Task.find({ boardId }).sort({ position: 1 }),
+          ActivityLog.create({
+            boardId,
+            userId: req.user.id,
+            action: 'MOVE_TASK',
+            details: { taskId: id, from: sourceStatus, to: destinationStatus }
+          })
+        ]);
+
+        getIO().to(`board:${boardId}`).emit('task:sync', { boardId, tasks: allTasks });
+      } catch (err) {
+        console.error('Background move sync failure:', err.message);
+      }
+    })();
   } catch (err) { next(err); }
 };
 
@@ -106,11 +118,27 @@ const deleteTask = async (req, res, next) => {
     }));
     if (bulkOps.length > 0) await Task.bulkWrite(bulkOps);
 
-    // Broadcast full updated list for instant sync
-    const allTasks = await Task.find({ boardId }).sort({ position: 1 });
-    getIO().to(`board:${boardId}`).emit('task:sync', { boardId, tasks: allTasks });
-
+    // Respond to user immediately after the core deletion is successful
     res.json({ success: true, message: 'Task deleted' });
+
+    // ─── Post-Response Tasks (Background) ─────────────────────────────────────
+    (async () => {
+      try {
+        const [allTasks] = await Promise.all([
+          Task.find({ boardId }).sort({ position: 1 }),
+          ActivityLog.create({
+            boardId,
+            userId: req.user.id,
+            action: 'DELETE_TASK',
+            details: { taskTitle: task.title }
+          })
+        ]);
+
+        getIO().to(`board:${boardId}`).emit('task:sync', { boardId, tasks: allTasks });
+      } catch (err) {
+        console.error('Background delete sync failure:', err.message);
+      }
+    })();
   } catch (err) { next(err); }
 };
 
