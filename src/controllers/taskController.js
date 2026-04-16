@@ -28,8 +28,9 @@ const createTask = async (req, res, next) => {
       details: { taskTitle: title }
     });
 
-    // Broadcast to board room
-    getIO().to(`board:${boardId}`).emit('task:created', task);
+    // Broadcast updated list to board room for instant sync
+    const allTasks = await Task.find({ boardId }).sort({ position: 1 });
+    getIO().to(`board:${boardId}`).emit('task:sync', { boardId, tasks: allTasks });
 
     res.status(201).json({ success: true, task });
   } catch (err) { next(err); }
@@ -69,9 +70,9 @@ const moveTask = async (req, res, next) => {
       details: { taskId: id, from: sourceStatus, to: destinationStatus }
     });
 
-    // Broadcast update to all members in the board room
-    // The frontend will listen and invalidate its React Query cache
-    getIO().to(`board:${boardId}`).emit('task:moved', { taskId: id, boardId });
+    // Broadcast the full updated list to all members for instant cache patching
+    const allTasks = await Task.find({ boardId }).sort({ position: 1 });
+    getIO().to(`board:${boardId}`).emit('task:sync', { boardId, tasks: allTasks });
 
     res.json({ success: true, message: 'Task moved successfully' });
   } catch (err) { next(err); }
@@ -96,7 +97,9 @@ const deleteTask = async (req, res, next) => {
     }));
     if (bulkOps.length > 0) await Task.bulkWrite(bulkOps);
 
-    getIO().to(`board:${boardId}`).emit('task:deleted', { taskId: id, boardId });
+    // Broadcast full updated list for instant sync
+    const allTasks = await Task.find({ boardId }).sort({ position: 1 });
+    getIO().to(`board:${boardId}`).emit('task:sync', { boardId, tasks: allTasks });
 
     res.json({ success: true, message: 'Task deleted' });
   } catch (err) { next(err); }
