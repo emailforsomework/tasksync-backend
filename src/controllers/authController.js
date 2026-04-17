@@ -10,10 +10,11 @@ const {
 } = require('../config/env');
 
 const setRefreshCookie = (res, token) => {
+  const isDev = NODE_ENV === 'development';
   res.cookie('refreshToken', token, {
     httpOnly: true,
-    secure: true, // Required for SameSite: None
-    sameSite: 'None',
+    secure: !isDev, // Only true in production
+    sameSite: isDev ? 'Lax' : 'None',
     maxAge: 7 * 24 * 60 * 60 * 1000,
   });
 };
